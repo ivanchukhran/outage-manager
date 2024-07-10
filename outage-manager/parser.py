@@ -38,7 +38,7 @@ class OutageStatus(Enum):
     INACTIVE = "INACTIVE"
 
 def get_page_content(url: str = URL) -> str:
-    with httpx.Client(headers=headers) as client:
+    with httpx.Client() as client:
         response = client.get(url)
         response.raise_for_status()
     return response.text
