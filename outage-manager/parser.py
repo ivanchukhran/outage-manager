@@ -17,6 +17,15 @@ color_to_status = {
     'yellow': 'electricity could be unavailable'
 }
 
+headers = {
+    "User-Agent": "Mozilla/5.0 (X11; Ubuntu; Linux x86_64; rv:129.0) Gecko/20100101 Firefox/129.0",
+    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/png,image/svg+xml,*/*;q=0.8",
+    "Accept-Encoding": "gzip, deflate, br, zstd",
+    "Accept-Language": "en-US,en;q=0.5",
+}
+
+
+
 def time_to_str(time: time) -> str:
     return time.strftime("%H:%M")
 
@@ -38,7 +47,7 @@ class OutageStatus(Enum):
     INACTIVE = "INACTIVE"
 
 def get_page_content(url: str = URL) -> str:
-    with httpx.Client() as client:
+    with httpx.Client(headers=headers) as client:
         response = client.get(url)
         response.raise_for_status()
     return response.text
