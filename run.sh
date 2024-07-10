@@ -12,5 +12,8 @@ else
     echo "Poetry is already installed"
 fi
 
+echo "Install the dependencies"
+poetry install
+
 echo "Running the application"
 poetry run python3 outage-manager/bot.py
