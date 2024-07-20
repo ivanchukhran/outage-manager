@@ -15,5 +15,8 @@ fi
 echo "Install the dependencies"
 poetry install
 
+echo "Installing the playwright browser"
+poetry run python3 -m playwright install chromium
+
 echo "Running the application"
 poetry run python3 outage-manager/bot.py
