@@ -15,7 +15,9 @@ fi
 echo "Install the dependencies"
 poetry install
 
-echo "Installing the playwright browser"
+echo "Installing the playwright dependencies"
+poetry run python3 -m playwright install-deps
+echo "Installing the chromium browser"
 poetry run python3 -m playwright install chromium
 
 echo "Running the application"
