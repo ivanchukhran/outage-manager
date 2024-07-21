@@ -3,13 +3,12 @@ import json
 import asyncio
 import logging
 from enum import Enum
-from typing import List, Callable, Set, Tuple, Dict
+from typing import List, Set, Tuple, Dict
 from collections import deque
 from collections.abc import Sequence
 from datetime import datetime, time, timedelta
 
 
-from pydantic import BaseModel
 from dotenv import load_dotenv
 
 from aiogram import Bot, Dispatcher, types
