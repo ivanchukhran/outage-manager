@@ -93,31 +93,33 @@ async def get_outages():
 class EnergyState:
     status: OutageStatus
     next_state_change: datetime | None
-    to_next_state_change: time | None
+    to_next_state_change: timedelta | None
 
     def __str__(self):
         string = f"{str(EmojiStatus.ENERGY)} Has energy" if self.status == OutageStatus.INACTIVE else f"{str(EmojiStatus.OUTAGE)} No energy"
         if self.next_state_change is not None:
             string += f" until {self.next_state_change.strftime('%H:%M')}"
         if self.to_next_state_change is not None:
-            string += f" ({self.to_next_state_change.strftime('%H:%M')} left)"
+            h, m = divmod(self.to_next_state_change.seconds, 3600)
+            m, _ = divmod(m, 60)
+            string += f" ({h:02d}:{m:02d} left)"
         return string
+
+
 
 def get_current_status(outages: list[Outage]):
     now = datetime.now()
-    current_time = now.time()
+    # current_time = now.time()
     status = OutageStatus.INACTIVE
     next_state_change = None
     to_next_state_change = None
     for i, outage in enumerate(outages):
-        outage_start_time = outage.start_time.time()
-        outage_end_time = outage.end_time.time()
-        if outage_start_time <= current_time <= outage_end_time:
+        if outage.start_time <= now <= outage.end_time:
             status = OutageStatus.ACTIVE
             next_state_change = outage.end_time
             to_next_state_change = outage.end_time - now
             break
-        elif outage_start_time > current_time:
+        elif outage.start_time > now:
             status = OutageStatus.INACTIVE
             next_state_change = outage.start_time
             to_next_state_change = outage.start_time - now
@@ -125,8 +127,8 @@ def get_current_status(outages: list[Outage]):
     if to_next_state_change is not None:
         h, m = divmod(to_next_state_change.seconds, 3600)
         m, _ = divmod(m, 60)
-        to_next_state_change = datetime.strptime(f"{h}:{m}", "%H:%M").time()
-    return EnergyState(status, next_state_change, datetime.strptime(f"{h}:{m}", "%H:%M").time())
+        to_next_state_change = timedelta(hours=h, minutes=m)
+    return EnergyState(status, next_state_change, to_next_state_change)
 
 async def main():
     outages = await get_outages()
