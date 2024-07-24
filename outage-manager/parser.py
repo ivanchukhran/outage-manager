@@ -53,11 +53,12 @@ headers = {
 async def get_content_with_httpx(url: str = URL) -> str:
     async with httpx.AsyncClient() as client:
         response = await client.get(url, headers=headers)
+        response.raise_for_status()
         return response.text
 
    
 async def get_content_with_playwright(url: str = URL) -> str:
-    with async_playwright() as p:
+    async with async_playwright() as p:
         browser = await p.chromium.launch()
         page = await browser.new_page()
         await page.goto(url)
@@ -97,7 +98,6 @@ async def get_outages():
                    duration=duration)
             )
     return result
-
 
 @dataclass
 class EnergyState:
