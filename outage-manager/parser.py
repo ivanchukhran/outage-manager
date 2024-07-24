@@ -12,6 +12,8 @@ from lxml import etree
 from dataclasses import dataclass
 
 from emoji import EmojiStatus
+from utils import timedelta_to_str
+from messages import Messages
 
 URL = "https://energy-ua.info/grafik/%D0%9F%D0%BE%D0%BB%D1%82%D0%B0%D0%B2%D0%B0/%D0%93%D0%B5%D1%82%D1%8C%D0%BC%D0%B0%D0%BD%D0%B0+%D0%A1%D0%B0%D0%B3%D0%B0%D0%B9%D0%B4%D0%B0%D1%87%D0%BD%D0%BE%D0%B3%D0%BE/8"
 
@@ -48,16 +50,24 @@ headers = {
     'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.9',
 }
 
+async def get_content_with_httpx(url: str = URL) -> str:
+    async with httpx.AsyncClient() as client:
+        response = await client.get(url, headers=headers)
+        return response.text
 
-async def get_page_content(url: str = URL) -> str:
-    async with async_playwright() as p:
-        chromium = p.chromium
-        browser = await chromium.launch(headless=True)
+   
+async def get_content_with_playwright(url: str = URL) -> str:
+    with async_playwright() as p:
+        browser = await p.chromium.launch()
         page = await browser.new_page()
-        await page.set_extra_http_headers(headers)
         await page.goto(url)
-        response = await page.content()
+        html = await page.content()
         await browser.close()
+        return html
+
+
+async def get_page_content(url: str = URL, fn=get_content_with_httpx) -> str:
+    response = await fn(url)
     return response
 
 async def get_outages():
@@ -95,14 +105,13 @@ class EnergyState:
     next_state_change: datetime | None
     to_next_state_change: timedelta | None
 
-    def __str__(self):
-        string = f"{str(EmojiStatus.ENERGY)} Has energy" if self.status == OutageStatus.INACTIVE else f"{str(EmojiStatus.OUTAGE)} No energy"
-        if self.next_state_change is not None:
-            string += f" until {self.next_state_change.strftime('%H:%M')}"
-        if self.to_next_state_change is not None:
-            h, m = divmod(self.to_next_state_change.seconds, 3600)
-            m, _ = divmod(m, 60)
-            string += f" ({h:02d}:{m:02d} left)"
+    def __str__(self) -> str:
+        message = Messages.OUTAGE if self.status == OutageStatus.ACTIVE else Messages.ENERGY
+        string = message.value.format(
+            emoji=EmojiStatus.OUTAGE if self.status == OutageStatus.ACTIVE else EmojiStatus.ENERGY,
+            until = self.next_state_change.strftime('%H:%M') if self.next_state_change is not None else '',
+            left = timedelta_to_str(self.to_next_state_change) if self.to_next_state_change is not None else ''
+            )
         return string
 
 

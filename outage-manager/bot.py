@@ -3,6 +3,7 @@ import json
 import asyncio
 import logging
 from enum import Enum
+from dataclasses import dataclass
 from typing import List, Set, Tuple, Dict
 from collections import deque
 from collections.abc import Sequence
@@ -16,9 +17,16 @@ from aiogram.filters.command import Command
 from aiogram import F
 
 from parser import get_current_status, get_outages, Outage
+from messages import Messages
 from emoji import EmojiStatus
+from utils import timedelta_to_str
 
 load_dotenv()
+
+@dataclass
+class QueuedMessage:
+    message: str
+    datetime: datetime
 
 def get_args():
     from argparse import ArgumentParser
@@ -48,24 +56,25 @@ class EventType(Enum):
     STATUS_CHANGED = "STATUS_CHANGED"
     NOTIFY_BEFORE = "NOTIFY_BEFORE"
 
-notify_before_supported_values = [5, 10, 15, 30] # minutes
-default_event_types = [EventType.OUTAGE, EventType.RESTORED, EventType.STATUS_CHANGED]
+NOTIFY_BEFORE_VALUES = [5, 10, 15, 30] # minutes
+DEFAULT_EVENT_TYPES = [EventType.OUTAGE, EventType.RESTORED, EventType.STATUS_CHANGED]
 
-default_events = [(event_type, None) for event_type in default_event_types]
-schedule_events = [(EventType.NOTIFY_BEFORE, notify_before) for notify_before in notify_before_supported_values]
+DEFAULT_EVENTS = [(event_type, None) for event_type in DEFAULT_EVENT_TYPES]
+SCHEDULE_EVENTS = [(EventType.NOTIFY_BEFORE, notify_before) for notify_before in NOTIFY_BEFORE_VALUES]
 
-all_events = default_events + schedule_events
+ALL_EVENTS = DEFAULT_EVENTS + SCHEDULE_EVENTS
 
 Event = Tuple[EventType, int | None]
 
-bot = Bot(token=API_TOKEN)
-dp = Dispatcher()
+BOT = Bot(token=API_TOKEN)
+DP = Dispatcher()
 
 class EventManager:
     def __init__(self, save_path: str = "events.json"):
-        # TODO: Implement the load from json method
         self.subscribers: Set[int] = set()
-        self.event_subscribers: Dict[Event, Set[int]] = dict().fromkeys(all_events, set())
+        self.event_subscribers: Dict[Event, Set[int]] = dict().fromkeys(ALL_EVENTS, set())
+
+        self.current_awaiting_task = None
 
         self.save_path = save_path
         self.load()
@@ -85,74 +94,91 @@ class EventManager:
             self.save()
             return
         self.subscribers.remove(id)
-        for event in all_events:
+        for event in ALL_EVENTS:
             self.event_subscribers[event].discard(id)
         self.save()
 
     async def notify(self, id: int, message: str):
-        await bot.send_message(id, message)
+        await BOT.send_message(id, message)
 
     async def notify_by_event(self, event: Event, message: str) -> None:
         for sub_id in self.event_subscribers[event]:
-            await bot.send_message(sub_id, message)
+            await BOT.send_message(sub_id, message)
 
     async def notify_all(self, message: str) -> None:
         for sub_id in self.subscribers:
-            await bot.send_message(sub_id, message)
+            await BOT.send_message(sub_id, message)
 
     def reschedule(self, outages: List[Outage]):
+        if self.current_awaiting_task:
+            self.current_awaiting_task.cancel()
+        self.current_awaiting_task = None
         self.scheduled_queue.clear()
-        logging.info(f"Rescheduling notifications for outages: {outages})")
-        current_time= time(datetime.now().hour, datetime.now().minute)
-        current_timedelta = timedelta(hours=current_time.hour, minutes=current_time.minute)
-        estimated_wait_time_list: List[Tuple[Event, int, str]] = [] # (notify_before, seconds, message)
-        reversed_notify_before_supported_values = notify_before_supported_values[::-1]
+        now = datetime.now()
+        estimated_wait_time_list: List[Tuple[Event, QueuedMessage]] = [] # (notify_before, queue_message)
+        reversed_notify_before_supported_values = NOTIFY_BEFORE_VALUES[::-1]
         for outage in outages:
-            outage_start_timedelta = timedelta(hours=outage.start_time.hour, minutes=outage.start_time.minute)
-            outage_end_timedelta = timedelta(hours=outage.end_time.hour, minutes=outage.end_time.minute)
-            # Schedule notifications for the status change
-            if current_timedelta < outage_start_timedelta:
+            if now < outage.start_time:
                 for notify_option in reversed_notify_before_supported_values:
-                    logging.debug(f"Outage: {outage.start_time} - {outage.end_time} {notify_option}, current: {current_timedelta}, start: {outage_start_timedelta}")
                     notify_before_timedelta = timedelta(minutes=notify_option)
-                    diff = outage_start_timedelta - current_timedelta - notify_before_timedelta
+                    diff = outage.start_time - now - notify_before_timedelta
                     if diff >= timedelta(0):
-                        message = f"{str(EmojiStatus.SCHEDULE)} Outage will start in {notify_option} minutes"
-                        estimated_wait_time_list.append(((EventType.NOTIFY_BEFORE, notify_option), diff.seconds, message))
-                        current_timedelta = current_timedelta + diff
-                message = f"{str(EmojiStatus.OUTAGE)} The outage has started at {outage.start_time.strftime('%H:%M')} and will end at {outage.end_time} ({outage.duration})"
-                diff = outage_start_timedelta - current_timedelta
-                estimated_wait_time_list.append(((EventType.STATUS_CHANGED, None), diff.seconds, message))
-                current_timedelta = current_timedelta + diff
-            # Schedule notifications for the outage end
-            if current_timedelta < outage_end_timedelta:
+                        message = Messages.OUTAGE_STARTS_SOON.value.format(
+                            emoji=EmojiStatus.SCHEDULE,
+                            time=outage.start_time.strftime("%H:%M"),
+                            duration=timedelta_to_str(notify_before_timedelta)
+                            )
+                        estimated_wait_time_list.append(((EventType.NOTIFY_BEFORE, notify_option),
+                                                         QueuedMessage(message, outage.start_time - notify_before_timedelta)))
+                message = Messages.OUTAGE_INFO.value.format(
+                    emoji=EmojiStatus.OUTAGE,
+                    start_time=outage.start_time.strftime("%H:%M"),
+                    end_time=outage.end_time.strftime("%H:%M"),
+                    duration=outage.duration
+                    )
+                estimated_wait_time_list.append(((EventType.STATUS_CHANGED, None),
+                                                 QueuedMessage(message, outage.start_time)))
+            if now <= outage.end_time:
                 for notify_option in reversed_notify_before_supported_values:
-                    logging.debug(f"Event: {notify_option}, current: {current_timedelta}, end: {outage_end_timedelta}")
                     notify_before_timedelta = timedelta(minutes=notify_option)
-                    diff = outage_end_timedelta - current_timedelta - notify_before_timedelta
+                    diff = outage.end_time - now - notify_before_timedelta
                     if diff >= timedelta(0):
-                        message = f"{str(EmojiStatus.SCHEDULE)} Outage will end in {notify_option} minutes"
-                        estimated_wait_time_list.append(((EventType.NOTIFY_BEFORE, notify_option), diff.seconds, message))
-                        current_timedelta = current_timedelta + diff
+                        message = Messages.OUTAGE_ENDS_SOON.value.format(
+                            emoji=EmojiStatus.SCHEDULE,
+                            time=outage.end_time.strftime("%H:%M"),
+                            duration=timedelta_to_str(notify_before_timedelta)
+                            )
+                        estimated_wait_time_list.append(((EventType.NOTIFY_BEFORE, notify_option),
+                                                         QueuedMessage(message, outage.end_time - notify_before_timedelta)))
                 next_outage = outages[outages.index(outage) + 1] if outages.index(outage) + 1 < len(outages) else None
-                message = f"{str(EmojiStatus.ENERGY)} The outage has ended at {outage.end_time.strftime('%H:%M')}."
+                message = Messages.OUTAGE_END.value.format(
+                    emoji=EmojiStatus.ENERGY,
+                    end_time=outage.end_time.strftime("%H:%M"),
+                    duration=outage.duration
+                    )
                 if next_outage:
-                    message += f" The next outage will start at {next_outage.start_time.strftime('%H:%M')}"
-                diff = outage_end_timedelta - current_timedelta
-                estimated_wait_time_list.append(((EventType.STATUS_CHANGED, None), diff.seconds, message))
-                current_timedelta = current_timedelta + diff
-        logging.debug(f"Estimated wait time list: {estimated_wait_time_list}")
-        for event, seconds, message in estimated_wait_time_list:
-            self.scheduled_queue.append((event, seconds, message))
+                    duration = timedelta_to_str(next_outage.start_time - outage.end_time)
+                    message += " " + Messages.NEXT_OUTAGE.value.format(
+                        next_time=next_outage.start_time.strftime("%H:%M"),
+                        duration=duration
+                        )
+                estimated_wait_time_list.append(((EventType.STATUS_CHANGED, None),
+                                                 QueuedMessage(message, outage.end_time)))
+        for event, queued_message in estimated_wait_time_list:
+            self.scheduled_queue.append((event, queued_message))
 
     async def process_scheduled_notifications(self):
         while True:
             logging.debug(f"Scheduled queue: {self.scheduled_queue}")
             if self.scheduled_queue:
-                event, seconds, message = self.scheduled_queue.popleft()
-                logging.info(f"Waiting for {seconds} seconds to notify about {event}")
-                await asyncio.sleep(seconds)
-                await self.notify_by_event(event, message)
+                event, queued_message = self.scheduled_queue.popleft()
+                now = datetime.now()
+                if now < queued_message.datetime:
+                    logging.info(f"Waiting for {queued_message.datetime} to notify about {event}")
+                    await asyncio.sleep((queued_message.datetime - now).seconds)
+                    await self.notify_by_event(event, queued_message.message)
+                else:
+                    logging.info(f"Skipping the notification for {event} as the time has passed")
             await asyncio.sleep(5)
 
     def load(self):
@@ -160,7 +186,7 @@ class EventManager:
             with open(self.save_path, "r") as file:
                 json_data = json.load(file)
                 self.subscribers = set(json_data["subscribers"])
-                self.event_subscribers = dict().fromkeys(all_events, set())
+                self.event_subscribers = dict().fromkeys(ALL_EVENTS, set())
                 for event in json_data["event_subscribers"]:
                     event_type = EventType(event["event_type"])
                     data = event["data"]
@@ -201,9 +227,18 @@ class StateManager:
         if self.current_outages != outages:
             logging.info(f"Outages have changed: {outages}")
             self.current_outages = outages
-            message = "Outages have changed\n" + "\n".join([str(EmojiStatus.OUTAGE) + " " + str(outage) for outage in outages])
+            outages_str = "\n".join([Messages.OUTAGE_INFO.value.format(
+                emoji=EmojiStatus.OUTAGE,
+                start_time=outage.start_time.strftime("%H:%M"),
+                end_time=outage.end_time.strftime("%H:%M"),
+                duration=outage.duration
+                ) for outage in outages])
+            message = Messages.OUTAGE_INFO_HEADER.value.format(emoji=EmojiStatus.WARNING) + outages_str
             await event_manager.notify_by_event((EventType.STATUS_CHANGED, None), message)
-            message = f"Status has changed to \n{str(self.current_status())}"
+            message = Messages.STATUS_CHANGED.value.format(
+                emoji=EmojiStatus.WARNING,
+                status=str(self.current_status())
+                )
             await event_manager.notify_by_event((EventType.STATUS_CHANGED, None), message)
             event_manager.reschedule(outages)
 
@@ -231,7 +266,7 @@ navigation_keyboard = types.ReplyKeyboardMarkup(
 
 schedule_keyboard = types.ReplyKeyboardMarkup(
     keyboard=[
-        [types.KeyboardButton(text=str(value))] for value in notify_before_supported_values
+        [types.KeyboardButton(text=str(value))] for value in NOTIFY_BEFORE_VALUES
     ]
 )
 schedule_keyboard.keyboard += [[types.KeyboardButton(text="Cancel")]]
@@ -245,18 +280,18 @@ def subscriable(func):
     async def wrapper(message: types.Message):
         user = check_user_or_raise(message.from_user)
         user_id = int(user.id)
-        event_manager.subscribe(id=user_id, events=default_events)
+        event_manager.subscribe(id=user_id, events=DEFAULT_EVENTS)
         await func(message)
     return wrapper
 
 
 # Define command handlers
-@dp.message(Command("start"))
+@DP.message(Command("start"))
 @subscriable
 async def cmd_start(message: types.Message):
     await message.reply("Hello! Choose an option:", reply_markup=navigation_keyboard)
 
-@dp.message(F.text.lower() == "current status")
+@DP.message(F.text.lower() == "current status")
 @subscriable
 async def current_outage_status(message: types.Message):
     try:
@@ -266,7 +301,7 @@ async def current_outage_status(message: types.Message):
         await message.reply(f"An error occurred: {e}")
 
 
-@dp.message(F.text.lower() == "today outages")
+@DP.message(F.text.lower() == "today outages")
 @subscriable
 async def today_outages(message: types.Message):
     try:
@@ -276,14 +311,14 @@ async def today_outages(message: types.Message):
         await message.reply(f"An error occurred: {e}")
 
 # TODO: Implement the schedule notification feature
-@dp.message(F.text.lower() == "schedule")
+@DP.message(F.text.lower() == "schedule")
 async def show_scheduling_options(message: types.Message):
     try:
         await message.reply("Choose the time before the outage to notify you", reply_markup=schedule_keyboard)
     except Exception as e:
         await message.reply(f"An error occurred: {e}")
 
-@dp.message(lambda message: message.text.isdigit() and int(message.text) in notify_before_supported_values)
+@DP.message(lambda message: message.text.isdigit() and int(message.text) in NOTIFY_BEFORE_VALUES)
 @subscriable
 async def choose_schedule_options(message: types.Message):
     try:
@@ -291,7 +326,7 @@ async def choose_schedule_options(message: types.Message):
         assert message_text is not None and message_text.isdigit()
         notify_option = int(message_text)
         logging.info(f"Notifying {notify_option} minutes before the outage")
-        if notify_option not in notify_before_supported_values:
+        if notify_option not in NOTIFY_BEFORE_VALUES:
             await message.reply("Unsupported value. Please choose a value from the list")
             return
         event = (EventType.NOTIFY_BEFORE, notify_option)
@@ -302,16 +337,16 @@ async def choose_schedule_options(message: types.Message):
     except Exception as e:
         await message.reply(f"An error occurred: {e}", reply_markup=navigation_keyboard)
 
-@dp.message(F.text.lower() == "cancel")
+@DP.message(F.text.lower() == "cancel")
 @subscriable
 async def cancel_schedule(message: types.Message):
     try:
-        user = check_user_or_raise(message.from_user)
+        check_user_or_raise(message.from_user)
         await message.reply("Notification setup have been canceled", reply_markup=navigation_keyboard)
     except Exception as e:
         await message.reply(f"An error occurred: {e}", reply_markup=navigation_keyboard)
 
-@dp.message(F.text.lower() == "unsubscribe")
+@DP.message(F.text.lower() == "unsubscribe")
 async def show_unsubscribe_options(message: types.Message):
     user = check_user_or_raise(message.from_user)
     user_id = int(user.id)
@@ -330,7 +365,7 @@ async def show_unsubscribe_options(message: types.Message):
     message_text = "Choose an option to unsubscribe"
     await message.reply(message_text, reply_markup=keyboard)
 
-@dp.message(lambda message: message.text.lower() == "all" or message.text in [f"{event_type.value}: {data}" for event_type, data in all_events])
+@DP.message(lambda message: message.text.lower() == "all" or message.text in [f"{event_type.value}: {data}" for event_type, data in ALL_EVENTS])
 async def unsubscribe(message: types.Message):
     try:
         user = check_user_or_raise(message.from_user)
@@ -349,12 +384,11 @@ async def unsubscribe(message: types.Message):
         await message.reply(f"An error occurred: {e}", reply_markup=navigation_keyboard)
 
 
-# async def main():
 if __name__ == "__main__":
     loop = asyncio.get_event_loop()
 
     tasks = asyncio.gather(
-        dp.start_polling(bot, handle_signals=False),
+        DP.start_polling(BOT, handle_signals=False),
         state_manager.periodic_status_check(args.delay),
         event_manager.process_scheduled_notifications(),
         return_exceptions=True

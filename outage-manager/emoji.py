@@ -6,6 +6,7 @@ class EmojiStatus(Enum):
     OUTAGE = u"🕯️"
     WAITING = u"⏳"
     SCHEDULE = u"⏰"
+    WARNING = u"⚠️"
 
     def __str__(self):
         return self.value
