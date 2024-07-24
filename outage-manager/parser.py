@@ -67,7 +67,7 @@ async def get_content_with_playwright(url: str = URL) -> str:
         return html
 
 
-async def get_page_content(url: str = URL, fn=get_content_with_httpx) -> str:
+async def get_page_content(url: str = URL, fn=get_content_with_playwright) -> str:
     response = await fn(url)
     return response
 
