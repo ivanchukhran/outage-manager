@@ -33,12 +33,33 @@ class Outage:
     end_time: datetime
     duration: str
 
+    def to_str_with_date(self) -> str:
+        message = color_to_message.get(self.status, Messages.OUTAGE_INFO)
+        return message.value.format(
+            emoji=EmojiStatus.OUTAGE if self.status == 'red' else EmojiStatus.ENERGY,
+            start_time=self.start_time.strftime('%H:%M'),
+            end_time=self.end_time.strftime('%H:%M'),
+            date = self.start_time.date().strftime('%d.%m.%Y'),
+            duration=self.duration
+        )
+
+    def to_str(self) -> str:
+        message = color_to_message.get(self.status, Messages.OUTAGE_INFO)
+        return message.value.format(
+            emoji=EmojiStatus.OUTAGE if self.status == 'red' else EmojiStatus.ENERGY,
+            start_time=self.start_time.strftime('%H:%M'),
+            end_time=self.end_time.strftime('%H:%M'),
+            duration=self.duration,
+            date = ''
+        )
+
     def __str__(self):
         message = color_to_message.get(self.status, Messages.OUTAGE_INFO)
         return message.value.format(
             emoji=EmojiStatus.OUTAGE if self.status == 'red' else EmojiStatus.ENERGY,
             start_time=self.start_time.strftime('%H:%M'),
             end_time=self.end_time.strftime('%H:%M'),
+            date = self.start_time.date().strftime('%d.%m.%Y'),
             duration=self.duration)
         # return f"{color_to_status.get(self.status)} from {time_to_str(self.start_time.time())} to {time_to_str(self.end_time.time())} ({self.duration})"
 
@@ -115,7 +136,7 @@ class EnergyState:
         message = Messages.OUTAGE if self.status == OutageStatus.ACTIVE else Messages.ENERGY
         string = message.value.format(
             emoji=EmojiStatus.OUTAGE if self.status == OutageStatus.ACTIVE else EmojiStatus.ENERGY,
-            until = self.next_state_change.strftime('%H:%M') if self.next_state_change is not None else '',
+            until = self.next_state_change.strftime('%H:%M %d.%m.%Y') if self.next_state_change is not None else '',
             left = timedelta_to_str(self.to_next_state_change) if self.to_next_state_change is not None else ''
             )
         return string

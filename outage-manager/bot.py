@@ -134,7 +134,8 @@ class EventManager:
                     emoji=EmojiStatus.OUTAGE,
                     start_time=outage.start_time.strftime("%H:%M"),
                     end_time=outage.end_time.strftime("%H:%M"),
-                    duration=outage.duration
+                    duration=outage.duration,
+                    date=outage.start_time.date().strftime("%d.%m.%Y")
                     )
                 estimated_wait_time_list.append(((EventType.STATUS_CHANGED, None),
                                                  QueuedMessage(message, outage.start_time)))
@@ -231,7 +232,8 @@ class StateManager:
                 emoji=EmojiStatus.OUTAGE,
                 start_time=outage.start_time.strftime("%H:%M"),
                 end_time=outage.end_time.strftime("%H:%M"),
-                duration=outage.duration
+                duration=outage.duration,
+                date=outage.start_time.date().strftime("%d.%m.%Y")
                 ) for outage in outages])
             message = Messages.OUTAGE_INFO_HEADER.value.format(emoji=EmojiStatus.WARNING) + outages_str
             await event_manager.notify_by_event((EventType.STATUS_CHANGED, None), message)
@@ -321,7 +323,7 @@ async def current_outage_status(message: types.Message):
 @subscriable
 async def today_outages(message: types.Message):
     try:
-        outages_str = "\n".join([str(outage) for outage in state_manager.get_today_outages()])
+        outages_str = "\n".join([outage.to_str() for outage in state_manager.get_today_outages()])
         await message.reply(outages_str)
     except Exception as e:
         logging.error(e)
@@ -331,7 +333,7 @@ async def today_outages(message: types.Message):
 @subscriable
 async def tomorrow_outages(message: types.Message):
     try:
-        outages_str = "\n".join([str(outage) for outage in state_manager.get_tomorrow_outages()])
+        outages_str = "\n".join([outage.to_str() for outage in state_manager.get_tomorrow_outages()])
         if not outages_str:
             outages_str = "На завтра відключень не заплановано"
         await message.reply(outages_str)
