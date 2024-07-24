@@ -242,10 +242,19 @@ class StateManager:
             await event_manager.notify_by_event((EventType.STATUS_CHANGED, None), message)
             event_manager.reschedule(outages)
 
-    def current_status(self):
+    def current_status(self) -> str:
         status = get_current_status(self.current_outages)
         logging.info(f"Current status: {str(status)}")
         return str(status)
+
+    def get_today_outages(self) -> List[Outage]:
+        today = datetime.now().date()
+        return [outage for outage in self.current_outages if outage.start_time.date() == today]
+
+    def get_tomorrow_outages(self) -> List[Outage]:
+        today = datetime.now().date()
+        tomorrow = today + timedelta(days=1)
+        return [outage for outage in self.current_outages if outage.start_time.date() == tomorrow]
 
     async def periodic_status_check(self, delay: int):
         while True:
@@ -255,13 +264,19 @@ class StateManager:
 
 state_manager = StateManager()
 
+class TextOptions(Enum):
+    CURRENT_STATE = "Поточний стан"
+    TODAY_OUTAGES = "Відключення на сьогодні"
+    TOMORROW_OUTAGES = "Відключення на завтра"
+    SCHEDULE = "Запланувати повідомлення"
+    UNSUBSCRIBE = "Відписатись від повідомлень"
+    CANCEL = "Скасувати"
+
+ERROR_MESSAGE = "Упс, сталася помилка. Спробуйте ще раз"
+
 navigation_keyboard = types.ReplyKeyboardMarkup(
-    keyboard=[
-        [types.KeyboardButton(text="Current status")],
-        [types.KeyboardButton(text="Today outages")],
-        [types.KeyboardButton(text="Schedule")],
-        [types.KeyboardButton(text="Unsubscribe")]
-    ]
+    keyboard=[[types.KeyboardButton(text=value.value)] for value in TextOptions
+                                                if value != TextOptions.CANCEL]
 )
 
 schedule_keyboard = types.ReplyKeyboardMarkup(
@@ -269,7 +284,7 @@ schedule_keyboard = types.ReplyKeyboardMarkup(
         [types.KeyboardButton(text=str(value))] for value in NOTIFY_BEFORE_VALUES
     ]
 )
-schedule_keyboard.keyboard += [[types.KeyboardButton(text="Cancel")]]
+schedule_keyboard.keyboard += [[types.KeyboardButton(text=TextOptions.CANCEL.value)]]
 
 def check_user_or_raise(user: types.User | None):
     if user is None:
@@ -289,34 +304,49 @@ def subscriable(func):
 @DP.message(Command("start"))
 @subscriable
 async def cmd_start(message: types.Message):
-    await message.reply("Hello! Choose an option:", reply_markup=navigation_keyboard)
+    await message.reply("Привіт! Обери необхідну опцію: ",
+                        reply_markup=navigation_keyboard)
 
-@DP.message(F.text.lower() == "current status")
+@DP.message(F.text.lower() == TextOptions.CURRENT_STATE.value.lower())
 @subscriable
 async def current_outage_status(message: types.Message):
     try:
         status = state_manager.current_status()
         await message.reply(str(status))
     except Exception as e:
-        await message.reply(f"An error occurred: {e}")
+        await message.reply(ERROR_MESSAGE)
 
 
-@DP.message(F.text.lower() == "today outages")
+@DP.message(F.text.lower() == TextOptions.TODAY_OUTAGES.value.lower())
 @subscriable
 async def today_outages(message: types.Message):
     try:
-        outages_str = "\n".join([str(EmojiStatus.OUTAGE) + " " + str(outage) for outage in state_manager.current_outages])
+        outages_str = "\n".join([str(outage) for outage in state_manager.get_today_outages()])
         await message.reply(outages_str)
     except Exception as e:
-        await message.reply(f"An error occurred: {e}")
+        logging.error(e)
+        await message.reply(ERROR_MESSAGE)
+
+@DP.message(F.text.lower() == TextOptions.TOMORROW_OUTAGES.value.lower())
+@subscriable
+async def tomorrow_outages(message: types.Message):
+    try:
+        outages_str = "\n".join([str(outage) for outage in state_manager.get_tomorrow_outages()])
+        if not outages_str:
+            outages_str = "На завтра відключень не заплановано"
+        await message.reply(outages_str)
+    except Exception as e:
+        logging.error(e)
+        await message.reply(ERROR_MESSAGE)
 
 # TODO: Implement the schedule notification feature
-@DP.message(F.text.lower() == "schedule")
+@DP.message(F.text.lower() == TextOptions.SCHEDULE.value.lower())
 async def show_scheduling_options(message: types.Message):
     try:
-        await message.reply("Choose the time before the outage to notify you", reply_markup=schedule_keyboard)
+        await message.reply("Оберіть час, за який ви хочете отримувати повідомлення перед відключенням",
+                            reply_markup=schedule_keyboard)
     except Exception as e:
-        await message.reply(f"An error occurred: {e}")
+        await message.reply(ERROR_MESSAGE)
 
 @DP.message(lambda message: message.text.isdigit() and int(message.text) in NOTIFY_BEFORE_VALUES)
 @subscriable
@@ -327,26 +357,28 @@ async def choose_schedule_options(message: types.Message):
         notify_option = int(message_text)
         logging.info(f"Notifying {notify_option} minutes before the outage")
         if notify_option not in NOTIFY_BEFORE_VALUES:
-            await message.reply("Unsupported value. Please choose a value from the list")
+            await message.reply("Обирати можна тільки зі списку", reply_markup=schedule_keyboard)
             return
         event = (EventType.NOTIFY_BEFORE, notify_option)
         user = check_user_or_raise(message.from_user)
         logging.info(f"Subscribing user {user.id} to event {event}")
         event_manager.subscribe(user.id, [event])
-        await message.reply(f"Notifications will be sent {notify_option} minutes before each status change", reply_markup=navigation_keyboard)
+        await message.reply(f"Повідомлення надходитимуть за {notify_option} хвилин до зміни статусу",
+                            reply_markup=navigation_keyboard)
     except Exception as e:
-        await message.reply(f"An error occurred: {e}", reply_markup=navigation_keyboard)
+        await message.reply(ERROR_MESSAGE, reply_markup=navigation_keyboard)
 
-@DP.message(F.text.lower() == "cancel")
+@DP.message(F.text.lower() == TextOptions.CANCEL.value.lower())
 @subscriable
 async def cancel_schedule(message: types.Message):
     try:
         check_user_or_raise(message.from_user)
-        await message.reply("Notification setup have been canceled", reply_markup=navigation_keyboard)
+        await message.reply("Скасовано",
+                            reply_markup=navigation_keyboard)
     except Exception as e:
-        await message.reply(f"An error occurred: {e}", reply_markup=navigation_keyboard)
+        await message.reply(ERROR_MESSAGE, reply_markup=navigation_keyboard)
 
-@DP.message(F.text.lower() == "unsubscribe")
+@DP.message(F.text.lower() == TextOptions.UNSUBSCRIBE.value.lower())
 async def show_unsubscribe_options(message: types.Message):
     user = check_user_or_raise(message.from_user)
     user_id = int(user.id)
@@ -357,31 +389,37 @@ async def show_unsubscribe_options(message: types.Message):
     unsubscribe_options = []
     for option in subscribed_options:
         event_type, data = option
-        str = f"{event_type.value}: {data}" if data else f"{event_type.value}"
+        event_type = event_type.value.replace('_', ' ').capitalize()
+        str = f"{event_type}: {data}" if data else f"{event_type}"
         unsubscribe_options.append([types.KeyboardButton(text=str)])
-    unsubscribe_options.append([types.KeyboardButton(text="All")])
-    unsubscribe_options.append([types.KeyboardButton(text="Cancel")])
+    unsubscribe_options.append([types.KeyboardButton(text="Усі")])
+    unsubscribe_options.append([types.KeyboardButton(text="Скасувати")])
     keyboard = types.ReplyKeyboardMarkup(keyboard=unsubscribe_options)
-    message_text = "Choose an option to unsubscribe"
+    message_text = "Оберіть подію, від якої ви хочете відписатись"
     await message.reply(message_text, reply_markup=keyboard)
 
-@DP.message(lambda message: message.text.lower() == "all" or message.text in [f"{event_type.value}: {data}" for event_type, data in ALL_EVENTS])
+@DP.message(lambda message:
+            message.text.lower() == "усі"
+            or message.text in [f"{event_type.value.replace('_', ' ').capitalize()}: {data}"
+                               if data else f"{event_type.value.capitalize()}"
+                                for event_type, data in ALL_EVENTS])
 async def unsubscribe(message: types.Message):
     try:
         user = check_user_or_raise(message.from_user)
         user_id = int(user.id)
         option = message.text
         assert option is not None
-        if option == "all":
+        if option == "усі":
             event_manager.unsubscribe(user_id)
-            await message.reply("You have been unsubscribed from all notifications", reply_markup=navigation_keyboard)
+            await message.reply("Ви успішно відписались від усіх повідомлень", reply_markup=navigation_keyboard)
             return
         event_type, data = option.split(":")
+        event_type = event_type.replace(' ', '_').upper()
         event = (EventType(event_type), int(data)) if data else (EventType(event_type), None)
         event_manager.unsubscribe(user_id, [event])
-        await message.reply(f"You have been unsubscribed from {event}", reply_markup=navigation_keyboard)
+        await message.reply(f"Ви успішно відписались від {event}", reply_markup=navigation_keyboard)
     except Exception as e:
-        await message.reply(f"An error occurred: {e}", reply_markup=navigation_keyboard)
+        await message.reply(ERROR_MESSAGE, reply_markup=navigation_keyboard)
 
 
 if __name__ == "__main__":

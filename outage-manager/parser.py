@@ -17,10 +17,10 @@ from messages import Messages
 
 URL = "https://energy-ua.info/grafik/%D0%9F%D0%BE%D0%BB%D1%82%D0%B0%D0%B2%D0%B0/%D0%93%D0%B5%D1%82%D1%8C%D0%BC%D0%B0%D0%BD%D0%B0+%D0%A1%D0%B0%D0%B3%D0%B0%D0%B9%D0%B4%D0%B0%D1%87%D0%BD%D0%BE%D0%B3%D0%BE/8"
 
-color_to_status = {
-    'red': 'electricity is unavailable',
-    'green': 'electricity is available',
-    'yellow': 'electricity could be unavailable'
+color_to_message = {
+    'red': Messages.OUTAGE_INFO,
+    'green': Messages.ENERGY,
+    'yellow': 'Можуть бути перебої'
 }
 
 def time_to_str(time: time) -> str:
@@ -34,7 +34,13 @@ class Outage:
     duration: str
 
     def __str__(self):
-        return f"{color_to_status.get(self.status)} from {time_to_str(self.start_time.time())} to {time_to_str(self.end_time.time())} ({self.duration})"
+        message = color_to_message.get(self.status, Messages.OUTAGE_INFO)
+        return message.value.format(
+            emoji=EmojiStatus.OUTAGE if self.status == 'red' else EmojiStatus.ENERGY,
+            start_time=self.start_time.strftime('%H:%M'),
+            end_time=self.end_time.strftime('%H:%M'),
+            duration=self.duration)
+        # return f"{color_to_status.get(self.status)} from {time_to_str(self.start_time.time())} to {time_to_str(self.end_time.time())} ({self.duration})"
 
 
 from enum import Enum
