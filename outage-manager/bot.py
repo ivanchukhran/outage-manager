@@ -21,18 +21,8 @@ from emoji import EmojiStatus
 
 load_dotenv()
 
-def get_args():
-    from argparse import ArgumentParser
-    parser = ArgumentParser()
-    parser.add_argument("--delay", type=int, default=5, help="Delay between status checks in minutes", required=False)
-    parser.add_argument("--test", action="store_true", help="Run the bot in test mode", required=False)
-    return parser.parse_args()
-
-args = get_args()
-if args.test:
-    API_TOKEN = os.environ.get("TEST_API_TOKEN")
-else:
-    API_TOKEN = os.environ.get("API_TOKEN")
+API_TOKEN = os.getenv("API_TOKEN")
+DELAY = int(os.getenv("DELAY", 5))
 
 if not API_TOKEN:
     raise ValueError("API_TOKEN environment variable is not set")
@@ -356,7 +346,7 @@ if __name__ == "__main__":
 
     tasks = asyncio.gather(
         dp.start_polling(bot, handle_signals=False),
-        state_manager.periodic_status_check(args.delay),
+        state_manager.periodic_status_check(DELAY),
         event_manager.process_scheduled_notifications(),
         return_exceptions=True
     )
