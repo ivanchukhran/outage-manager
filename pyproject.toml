@@ -16,6 +16,8 @@ asyncio = "^3.4.3"
 playwright = "^1.45.0"
 pymongo = "^4.8.0"
 pytest = "^8.3.2"
+black = "^24.4.2"
+pre-commit = "^3.7.1"
 
 
 [build-system]
@@ -24,3 +26,6 @@ build-backend = "poetry.core.masonry.api"
 
 [tool.pytest.ini_options]
 testpaths = ["outage-manager/tests"]
+
+[tool.black]
+line-length = 79
